@@ -1,0 +1,461 @@
+{# --- HELPER MACROS & BASE SETUP --- #}
+{% macro clean_orcid(val) -%}
+  {%- set ns_o = namespace(raw='') -%}
+  {%- set extracted_str = extract_text(val) | string | trim -%}
+
+  {%- if val is mapping -%}
+    {%- set val_inner = val.get('value', val) -%}
+    {%- if val_inner is mapping and 'id' in val_inner and val_inner['id'] -%}
+      {%- set ns_o.raw = val_inner['id'] | string -%}
+    {%- else -%}
+      {%- set ns_o.raw = extracted_str -%}
+    {%- endif -%}
+  {%- elif val.value is defined -%}
+    {%- set val_inner = val.value -%}
+    {%- if val_inner.id is defined and val_inner.id -%}
+      {%- set ns_o.raw = val_inner.id | string -%}
+    {%- else -%}
+      {%- set ns_o.raw = extracted_str -%}
+    {%- endif -%}
+  {%- else -%}
+    {%- set ns_o.raw = extracted_str -%}
+  {%- endif -%}
+
+  {%- set full_str = ns_o.raw if ns_o.raw else extracted_str -%}
+  {%- set ns_match = namespace(orcid='') -%}
+
+  {%- if '-' in full_str -%}
+    {%- set parts = full_str.split('-') -%}
+    {%- if parts | length >= 4 -%}
+      {%- for i in range(parts | length - 3) -%}
+        {%- set p0, p1, p2, p3 = parts[i] | trim, parts[i+1] | trim, parts[i+2] | trim, parts[i+3] | trim -%}
+        {%- if p0 | length >= 4 and p1 | length == 4 and p2 | length == 4 and p3 | length >= 4 -%}
+          {%- set candidate = p0[-4:] ~ '-' ~ p1 ~ '-' ~ p2 ~ '-' ~ p3[:4] -%}
+          {%- set cand_digits = candidate | replace('-', '') -%}
+          {%- if cand_digits[:15].isdigit() -%}
+            {%- set ns_match.orcid = candidate -%}
+          {%- endif -%}
+        {%- endif -%}
+      {%- endfor -%}
+    {%- endif -%}
+  {%- endif -%}
+
+  {%- if not ns_match.orcid -%}
+    {%- set ns_d = namespace(digits='') -%}
+    {%- for char in full_str -%}
+      {%- if char in '0123456789X' -%}
+        {%- set ns_d.digits = ns_d.digits ~ char -%}
+      {%- endif -%}
+    {%- endfor -%}
+    {%- if ns_d.digits | length == 16 and ns_d.digits[:15].isdigit() -%}
+      {%- set ns_match.orcid = ns_d.digits[:4] ~ '-' ~ ns_d.digits[4:8] ~ '-' ~ ns_d.digits[8:12] ~ '-' ~ ns_d.digits[12:16] -%}
+    {%- endif -%}
+  {%- endif -%}
+
+  {%- set out = ns_match.orcid -%}
+  {%- if not out and full_str and full_str | length != 36 and not full_str.startswith('{') -%}
+    {%- set out = full_str | trim -%}
+  {%- endif -%}
+
+  {{ out }}
+{%- endmacro %}
+
+{% macro sanitize(val, fallback='') -%}
+  {%- set raw = resolve_one(val) if resolve_one is defined else val -%}
+  {%- set s = raw | string | trim -%}
+  {%- set text = extract_text(s) if extract_text is defined else s -%}
+  {%- set text = text | string -%}
+
+  {%- if '!' in text -%}
+    {%- set text = text.split('!')[0] -%}
+  {%- endif -%}
+
+  {%- set text = text | replace('****', '') | replace('**', '') | replace('&#34;', '') | replace('&quot;', '') | replace('&#39;', "'") | replace('&apos;', "'") | replace('[', '') | replace(']', '') | trim -%}
+  {%- set is_num = text.isdigit() -%}
+  {%- set is_uuid = (text | length == 36 and '-' in text) -%}
+  {%- set is_raw_object = text.startswith('{') or 'type:' in text or 'StringReply' in text or 'ClearReply' in text -%}
+
+  {%- if not text or is_num or is_uuid or is_raw_object or text | lower == 'n/a' -%}
+    {{ fallback | safe }}
+  {%- else -%}
+    {{ text | safe }}
+  {%- endif -%}
+{%- endmacro %}
+
+{%- set replies = ctx.questionnaire.replies -%}
+
+{%- macro extract_text(val) -%}
+  {%- if val is none -%}
+  {%- elif val is string or val is number -%}
+    {{ val | string | trim }}
+  {%- elif val is mapping -%}
+    {%- if 'value' in val and val['value'] is not none and (val['value'] | string | trim) != '' -%}
+      {{ extract_text(val['value']) }}
+    {%- elif 'label' in val and val['label'] is not none and (val['label'] | string | trim) != '' -%}
+      {{ extract_text(val['label']) }}
+    {%- elif 'title' in val and val['title'] is not none and (val['title'] | string | trim) != '' -%}
+      {{ extract_text(val['title']) }}
+    {%- elif 'name' in val and val['name'] is not none and (val['name'] | string | trim) != '' -%}
+      {{ extract_text(val['name']) }}
+    {%- else -%}
+      {{ val | string | trim }}
+    {%- endif -%}
+  {%- else -%}
+    {%- if val.value is defined and val.value is not none and (val.value | string | trim) != '' -%}
+      {{ extract_text(val.value) }}
+    {%- elif val.label is defined and val.label is not none and (val.label | string | trim) != '' -%}
+      {{ extract_text(val.label) }}
+    {%- elif val.title is defined and val.title is not none and (val.title | string | trim) != '' -%}
+      {{ extract_text(val.title) }}
+    {%- elif val.name is defined and val.name is not none and (val.name | string | trim) != '' -%}
+      {{ extract_text(val.name) }}
+    {%- else -%}
+      {{ val | string | trim }}
+    {%- endif -%}
+  {%- endif -%}
+{%- endmacro -%}
+
+{%- macro resolve_one(val) -%}
+  {%- set val_raw = extract_text(val) | string | replace('&#34;', '"') | replace('&quot;', '"') | replace('&#39;', "'") | replace('&apos;', "'") | trim -%}
+  {%- set clean_uuid = val_raw | replace('[', '') | replace(']', '') | replace('"', '') | replace("'", '') | trim -%}
+  {%- set ns = namespace(out='') -%}
+
+  {%- if clean_uuid | length == 36 and '-' in clean_uuid -%}
+    {%- for k, v in replies.items() -%}
+      {%- if not ns.out and clean_uuid in k -%}
+        {%- if k.endswith('428a0c90-3aa8-408a-a663-712793e14d2d') -%}
+          {%- set sub_val = extract_text(v) | trim -%}
+          {%- if sub_val and sub_val != '' and sub_val != clean_uuid -%}
+            {%- set ns.out = sub_val -%}
+          {%- endif -%}
+        {%- endif -%}
+      {%- endif -%}
+    {%- endfor -%}
+
+    {%- if not ns.out -%}
+      {%- for k, v in replies.items() -%}
+        {%- if not ns.out and clean_uuid in k -%}
+          {%- set sub_val = extract_text(v) | trim -%}
+          {%- if sub_val and sub_val != '' and sub_val != clean_uuid and sub_val | length != 36 -%}
+            {%- set ns.out = sub_val -%}
+          {%- endif -%}
+        {%- endif -%}
+      {%- endfor -%}
+    {%- endif -%}
+
+    {%- if not ns.out -%}
+      {%- set km_sources = [
+        ctx.knowledgeModel if ctx.knowledgeModel is defined else {},
+        ctx.knowledgeModel.entities if (ctx.knowledgeModel is defined and ctx.knowledgeModel.entities is defined) else {},
+        ctx.entities if ctx.entities is defined else {},
+        ctx.km if ctx.km is defined else {},
+        ctx.km.entities if (ctx.km is defined and ctx.km.entities is defined) else {},
+        ctx.integrations if ctx.integrations is defined else {}
+      ] -%}
+
+      {%- for km in km_sources -%}
+        {%- if not ns.out and km is mapping -%}
+          {%- for key in ['choices', 'answers', 'items', 'integrations', 'options'] -%}
+            {%- if not ns.out and key in km -%}
+              {%- set container = km[key] -%}
+              {%- if container is mapping and clean_uuid in container -%}
+                {%- set ns.out = extract_text(container[clean_uuid]) | trim -%}
+              {%- elif container is iterable and container is not string and container is not mapping -%}
+                {%- for item in container -%}
+                  {%- if not ns.out and item is mapping -%}
+                    {%- if item.uuid is defined and item.uuid == clean_uuid -%}
+                      {%- set ns.out = extract_text(item) | trim -%}
+                    {%- elif item.id is defined and item.id == clean_uuid -%}
+                      {%- set ns.out = extract_text(item) | trim -%}
+                    {%- endif -%}
+                  {%- endif -%}
+                {%- endfor -%}
+              {%- endif -%}
+            {%- endif -%}
+          {%- endfor -%}
+        {%- endif -%}
+      {%- endfor -%}
+    {%- endif -%}
+
+    {%- if not ns.out -%}
+      {%- for k, v in replies.items() -%}
+        {%- if not ns.out and ((clean_uuid ~ '.') in k or k.startswith(clean_uuid ~ '.')) -%}
+          {%- set sub_str = extract_text(v) | trim -%}
+          {%- if sub_str and sub_str != '' and sub_str != clean_uuid and sub_str | length != 36 -%}
+            {%- set ns.out = sub_str -%}
+          {%- endif -%}
+        {%- endif -%}
+      {%- endfor -%}
+    {%- endif -%}
+  {%- endif -%}
+
+  {{ (ns.out if ns.out else val_raw) | safe }}
+{%- endmacro -%}
+
+{%- macro get_val(uuid) -%}
+  {%- set ns = namespace(replies=[]) -%}
+  {%- for k, v in replies.items() -%}
+    {%- if k.endswith(uuid) -%}
+      {%- set ns.replies = ns.replies + [v] -%}
+    {%- endif -%}
+  {%- endfor -%}
+
+  {%- if ns.replies | length > 0 -%}
+    {%- set ns_labels = namespace(list=[]) -%}
+    {%- for r in ns.replies -%}
+      {%- set item_list = r | reply_items if reply_items is defined else [] -%}
+      {%- if item_list and item_list | length > 0 -%}
+        {%- for item_id in item_list -%}
+          {%- set label = resolve_one(item_id) | trim -%}
+          {%- if label != '' -%}
+            {%- set ns_labels.list = ns_labels.list + [label] -%}
+          {%- endif -%}
+        {%- endfor -%}
+      {%- else -%}
+        {%- set label = resolve_one(r) | trim -%}
+        {%- if label != '' -%}
+          {%- set ns_labels.list = ns_labels.list + [label] -%}
+        {%- endif -%}
+      {%- endif -%}
+    {%- endfor -%}
+    {{ sanitize(ns_labels.list | join(', '), fallback='') }}
+  {%- endif -%}
+{%- endmacro -%}
+
+{# --- DATA PROCESSING --- #}
+
+{# 1. Authors & Contacts #}
+{% set ns_items = namespace(list=[]) -%}
+{%- for k, v in replies.items() -%}
+  {%- if k.endswith('11ee0c25-3017-4bd2-949d-c97439dffcb2') -%}
+    {%- set ns_items.list = v | reply_items -%}
+  {%- endif -%}
+{%- endfor -%}
+
+{%- set ns_auth = namespace(authors=[]) -%}
+{%- set ns_cont = namespace(contacts=[]) -%}
+
+{%- for item_id in ns_items.list -%}
+  {%- set ns_person = namespace(name='', orcid='', email='', is_contact=false) -%}
+  {%- for k, v in replies.items() -%}
+    {%- if k.endswith(item_id ~ '.f97a43dc-adbf-4e80-95cd-a573d16d4473') -%}
+      {%- set ns_person.name = extract_text(v) | trim -%}
+    {%- endif -%}
+    {%- if k.endswith(item_id ~ '.93527fac-690a-4fc6-941c-da8ffee332f3') -%}
+      {%- set ns_person.orcid = clean_orcid(v) | trim -%}
+    {%- endif -%}
+    {%- if k.endswith(item_id ~ '.b78ae702-3958-497e-8b92-dbd90b9de23f') -%}
+      {%- set ns_person.email = extract_text(v) | trim -%}
+    {%- endif -%}
+    {%- if ('.' ~ item_id ~ '.') in k or k.endswith('.' ~ item_id) -%}
+      {%- set v_str = (v | reply_items | string) if reply_items is defined else (v | string) -%}
+      {%- if 'ef04c062-6faf-405e-8e01-44c52fafb188' in v_str -%}
+        {%- set ns_person.is_contact = true -%}
+      {%- endif -%}
+    {%- endif -%}
+  {%- endfor -%}
+
+  {%- if ns_person.name -%}
+    {%- set p_obj = {"name": ns_person.name, "orcid": ns_person.orcid, "email": ns_person.email} -%}
+    {%- set ns_auth.authors = ns_auth.authors + [p_obj] -%}
+    {%- if ns_person.is_contact -%}
+      {%- set ns_cont.contacts = ns_cont.contacts + [p_obj] -%}
+    {%- endif -%}
+  {%- endif -%}
+{%- endfor -%}
+
+{# 2. Formats (Deduplicated) #}
+{%- set format_categories = [
+  {'label': 'Format of raw data', 'uuid': 'd3b36c72-98c9-44d8-97ee-ae7625a7f8af'},
+  {'label': 'Format for data manipulation of raw data', 'uuid': '657064ad-2c4d-4f8f-92be-82c6707c9add'},
+  {'label': 'Distribution of data', 'uuid': '212e9028-c005-40cc-9346-e15881d4a17b'},
+  {'label': 'Reused data', 'uuid': '9591484d-687a-402d-b963-a875e20c1805'},
+  {'label': 'Documentation', 'uuid': '19e1f27c-a6a0-446f-a887-4c036031fe30'}
+] -%}
+{%- set ns_formats = namespace(categories=[]) -%}
+{%- for cat in format_categories -%}
+  {%- set ns_cat = namespace(formats=[]) -%}
+  {%- for k, v in replies.items() -%}
+    {%- if k.endswith(cat.uuid) -%}
+      {%- set raw_val = v | reply_items if (v | reply_items) else v -%}
+      {%- if raw_val is mapping and 'value' in raw_val -%}
+        {%- set raw_val = raw_val['value'] -%}
+      {%- endif -%}
+      {%- set items_list = raw_val if (raw_val is iterable and raw_val is not string and raw_val is not mapping) else [raw_val] -%}
+      {%- for item in items_list -%}
+        {%- set fmt_resolved = resolve_one(item) | trim -%}
+        {%- set fmt_text = fmt_resolved if (fmt_resolved and (fmt_resolved | length != 36 or '-' not in fmt_resolved)) else extract_text(item) | trim -%}
+        {%- set clean_fmt = sanitize(fmt_text, fallback='') | trim -%}
+        {%- if clean_fmt and clean_fmt not in ns_cat.formats and (clean_fmt | length != 36 or '-' not in clean_fmt) -%}
+          {%- set ns_cat.formats = ns_cat.formats + [clean_fmt] -%}
+        {%- endif -%}
+      {%- endfor -%}
+    {%- endif -%}
+  {%- endfor -%}
+  {%- if ns_cat.formats | length > 0 -%}
+    {%- set ns_formats.categories = ns_formats.categories + [{'category': cat.label, 'formats': ns_cat.formats}] -%}
+  {%- endif -%}
+{%- endfor -%}
+
+{# 3. Original Data #}
+{%- set ns_orig = namespace(items=[]) -%}
+{%- for k, v in replies.items() -%}
+  {%- if k.endswith('24b6d7a9-e036-4386-819b-697aec341c51') -%}
+    {%- set ns_orig.items = v | reply_items -%}
+  {%- endif -%}
+{%- endfor -%}
+{%- set ns_orig_data = namespace(list=[]) -%}
+{%- for item_id in ns_orig.items -%}
+  {%- set ns_item = namespace(name='', pid='') -%}
+  {%- for k, v in replies.items() -%}
+    {%- if k.endswith(item_id ~ '.68bee231-12c0-44b8-b6cc-45a9a74e51f7') -%}
+      {%- set ns_item.name = extract_text(v) | trim -%}
+    {%- endif -%}
+    {%- if (item_id ~ '.5b2f4c55-1535-4374-adfd-407477272b64') in k -%}
+      {%- set ns_item.pid = extract_text(v) | trim -%}
+    {%- endif -%}
+  {%- endfor -%}
+  {%- set ns_orig_data.list = ns_orig_data.list + [{"name": sanitize(ns_item.name, fallback='N/A'), "pid": sanitize(ns_item.pid, fallback='')}] -%}
+{%- endfor -%}
+
+{# 4. Reuse Tools & Restrictions #}
+{%- set ns_tools = namespace(items=[]) -%}
+{%- for k, v in replies.items() -%}
+  {%- if k.endswith('95aeb038-8ce1-4e49-8326-3929376af54e') -%}
+    {%- set parts = k.split('.') -%}
+    {%- if parts | length >= 2 -%}
+      {%- set item_id = parts[-2] -%}
+      {%- if item_id not in ns_tools.items -%}
+        {%- set ns_tools.items = ns_tools.items + [item_id] -%}
+      {%- endif -%}
+    {%- endif -%}
+  {%- endif -%}
+{%- endfor -%}
+
+{%- set ns_tools_list = namespace(list=[]) -%}
+{%- for item_id in ns_tools.items -%}
+  {%- set ns_t = namespace(name='', desc='', open='', pid='', scope='') -%}
+  {%- for k, v in replies.items() -%}
+    {%- if ('.' ~ item_id ~ '.') in k or k.startswith(item_id ~ '.') -%}
+      {%- if k.endswith('95aeb038-8ce1-4e49-8326-3929376af54e') -%}
+        {%- set ns_t.name = sanitize(v, fallback='') | trim -%}
+      {%- elif k.endswith('1b6586c8-396d-442c-b76c-9b1da957e700') -%}
+        {%- set ns_t.desc = sanitize(v, fallback='') | trim -%}
+      {%- elif k.endswith('55a60078-6bef-40a9-bf6f-8f8cb2dccaed') -%}
+        {%- set ns_t.open = sanitize(v, fallback='') | trim -%}
+      {%- elif k.endswith('0168bb45-2865-4ee2-ac84-fa1138273351') -%}
+        {%- set ns_t.pid = sanitize(v, fallback='') | trim -%}
+      {%- endif -%}
+    {%- endif -%}
+  {%- endfor -%}
+  {%- if ns_t.name -%}
+    {%- set ns_tools_list.list = ns_tools_list.list + [{
+      "name": ns_t.name,
+      "description": ns_t.desc,
+      "openAvailability": ns_t.open,
+      "pid": ns_t.pid
+    }] -%}
+  {%- endif -%}
+{%- endfor -%}
+
+{# 5. Ethics & Approvals #}
+{%- set ns_ethics = namespace(committee='', app_num='') -%}
+{%- for k, v in replies.items() -%}
+  {%- if k.endswith('92794450-6bbe-4bd0-92a5-464ec4dd1165') -%}
+    {%- set ns_ethics.committee = sanitize(v, fallback='') | trim -%}
+  {%- elif k.endswith('b39e3dae-a4ab-4747-afda-2076cb7a0f5b') -%}
+    {%- set ns_ethics.app_num = sanitize(v, fallback='') | trim -%}
+  {%- endif -%}
+{%- endfor -%}
+
+{# 6. Citations #}
+{%- set ns_citations = namespace(items=[]) -%}
+{%- for k, v in replies.items() -%}
+  {%- if k.endswith('37a38895-854e-4eea-a276-a2d3b0b9b24c') -%}
+    {%- set citation_text = sanitize(v, fallback='') | trim -%}
+    {%- if citation_text and citation_text not in ns_citations.items -%}
+      {%- set ns_citations.items = ns_citations.items + [citation_text] -%}
+    {%- endif -%}
+  {%- endif -%}
+{%- endfor -%}
+
+{# 7. Acknowledgements #}
+{%- set ns_ack = namespace(custom='', funder='', grantid='', status='') -%}
+{%- for k, v in replies.items() -%}
+  {%- if k.endswith('UUID_ACKNOWLEDGEMENTS') -%}
+    {%- set ns_ack.custom = sanitize(v, fallback='') | trim -%}
+  {%- elif k.endswith('cb8a257d-9883-44b3-94f5-967a021fddd4') -%}
+    {%- set ns_ack.funder = sanitize(v, fallback='') | trim -%}
+  {%- elif k.endswith('acd91149-ae2f-4af0-b59c-e90f284fb615') -%}
+    {%- set ns_ack.grantid = sanitize(v, fallback='') | trim -%}
+  {%- elif k.endswith('9650b56c-cd2e-409d-92cb-3c2a4de66d0b') -%}
+    {%- set ns_ack.status = sanitize(v, fallback='') | trim -%}
+  {%- endif -%}
+{%- endfor -%}
+
+{# 8. Change History #}
+{%- set ns_history = namespace(versions=[]) -%}
+{% if ctx.questionnaire is defined and ctx.questionnaire.versions is defined and ctx.questionnaire.versions | length > 0 -%}
+  {% for v in ctx.questionnaire.versions -%}
+    {% set v_date = v.createdAt if v.createdAt is defined else v.created_at -%}
+    {% set ns_history.versions = ns_history.versions + [{
+      "version": v.name,
+      "date": (v_date | datetime_format("%Y.%m.%d-%H%M") if v_date else 'N/A'),
+      "description": v.description | default('', true)
+    }] -%}
+  {% endfor -%}
+{%- else -%}
+  {% set ns_history.versions = [{
+    "version": "Version " ~ (ctx.document.createdAt | datetime_format("%Y.%m.%d-%H%M")),
+    "date": ctx.document.createdAt | datetime_format("%Y.%m.%d-%H%M"),
+    "description": "Initial document export."
+  }] -%}
+{%- endif -%}
+
+{# --- JSON OUTPUT RENDERING --- #}
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "templateVersion": "1.0.0",
+  "project": {
+    "name": {{ get_val('03bc384e-914c-4c93-94e9-f8e38ae99eac') | tojson }},
+    "overview": {{ get_val('069c6907-ed6d-4b73-8ea6-fc9e77cdf6e1') | tojson }},
+    "website": {{ get_val('4f8a9683-b9f9-4af0-a8dd-c63b2c533e9b') | tojson }}
+  },
+  "basicInformation": {
+    "datasetName": {{ get_val('428a0c90-3aa8-408a-a663-712793e14d2d') | tojson }},
+    "authors": {{ ns_auth.authors | tojson }},
+    "mainContacts": {{ ns_cont.contacts | tojson }},
+    "license": {{ get_val('07cbba4a-e2a3-4dc9-b153-7da8ee5ac10b') | tojson }},
+    "readmeVersion": {{ (ctx.document.createdAt | datetime_format("%Y.%m.%d-%H%M")) | tojson }},
+    "pid": {{ get_val('040509af-4616-4683-9228-5b4c907ce4b2') | tojson }}
+  },
+  "description": {
+    "briefDescription": {{ get_val('258c7868-be69-4810-a5ce-d26c19b54053') | tojson }},
+    "researchContext": {{ get_val('6c1a6a0b-2525-4c0f-9afb-d5db065db8ab') | tojson }}
+  },
+  "datasetContents": {
+    "directoryStructure": {{ get_val('ff38c067-8c68-4cf0-95dc-43c327a3ea54') | tojson }},
+    "fileFormats": {{ ns_formats.categories | tojson }},
+    "namingConventions": {{ get_val('8c74b1f8-04db-4093-82aa-42798a4d9a07') | tojson }}
+  },
+  "methodologyProvenance": {
+    "originalData": {{ ns_orig_data.list | tojson }}
+  },
+  "reuse": {
+    "noToolsRequiredReason": {{ resolve_one(get_val('ed5dbe1b-ba4b-4600-8898-435af63d78ab')) | tojson }},
+    "specializedTools": {{ ns_tools_list.list | tojson }}
+  },
+  "proposedCitation": {{ ns_citations.items | tojson }},
+  "ethicsAndDataProtection": {
+    "ethicsCommittee": {{ ns_ethics.committee | tojson }},
+    "applicationNumber": {{ ns_ethics.app_num | tojson }}
+  },
+  "acknowledgements": {
+    "custom": {{ ns_ack.custom | tojson }},
+    "funder": {{ ns_ack.funder | tojson }},
+    "grantId": {{ ns_ack.grantid | tojson }},
+    "fundingStatus": {{ ns_ack.status | tojson }},
+    "attribution": "This README was based on the template/examples authored by the Collective of Data Stewards of the Czech Data Stewards Community (CC BY 4.0)."
+  },
+  "changeHistory": {{ ns_history.versions | tojson }}
+}

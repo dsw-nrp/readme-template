@@ -1,0 +1,71 @@
+{
+    "id": "dmp.eosc.cz.readme-template",
+    "version": "1.0.0",
+    "name": "README File",
+    "description": "If you need to also use README files for your data deposition, you do not have to do it twice. Just print the answers from the DMP. Check that all sections are answered or remove what is not applicable.",
+    "license": "Apache-2.0",
+    "language": "en",
+    "metamodelVersion": "19.0",
+    "allowedPackages": [
+        {
+            "id": "dmp.eosc.cz.czech-nrp-km",
+            "maxVersion": null,
+            "minVersion": "1.0.2"
+        }
+    ],
+    "formats": [
+        {
+            "uuid": "b58f636d-8510-46bd-b6a4-1412379e515d",
+            "name": "JSON",
+            "icon": "fas fa-code",
+            "steps": [
+                {
+                    "name": "jinja",
+                    "options": {
+                        "content-type": "application/json",
+                        "extension": "json",
+                        "template": "src/README.json.j2"
+                    }
+                }
+            ]
+        },
+        {
+            "uuid": "187ca0fb-6807-4aa8-8e90-75d17e2b5c90",
+            "name": "markdown",
+            "icon": "fab fa-markdown",
+            "steps": [
+                {
+                    "name": "jinja",
+                    "options": {
+                        "content-type": "text/markdown",
+                        "extension": "md",
+                        "template": "src/README.md.j2"
+                    }
+                }
+            ]
+        },
+        {
+            "uuid": "f5df7fa4-c831-4486-a19e-35c2ef23b346",
+            "name": "Plain Text",
+            "icon": "fas fa-file-alt",
+            "steps": [
+                {
+                    "name": "jinja",
+                    "options": {
+                        "content-type": "text/plain",
+                        "extension": "txt",
+                        "template": "src/README.md.j2"
+                    }
+                }
+            ]
+        }
+    ],
+    "_tdk": {
+        "version": "4.35.0",
+        "readmeFile": "README.md",
+        "files": [
+            "src/**/*.j2",
+            "LICENSE"
+        ]
+    }
+}

@@ -1,0 +1,1374 @@
+{% macro clean_orcid(val) -%}
+  {%- set ns_o = namespace(raw='') -%}
+  {%- set extracted_str = extract_text(val) | string | trim -%}
+
+  {%- if val is mapping -%}
+    {%- set val_inner = val.get('value', val) -%}
+    {%- if val_inner is mapping and 'id' in val_inner and val_inner['id'] -%}
+      {%- set ns_o.raw = val_inner['id'] | string -%}
+    {%- else -%}
+      {%- set ns_o.raw = extracted_str -%}
+    {%- endif -%}
+  {%- elif val.value is defined -%}
+    {%- set val_inner = val.value -%}
+    {%- if val_inner.id is defined and val_inner.id -%}
+      {%- set ns_o.raw = val_inner.id | string -%}
+    {%- else -%}
+      {%- set ns_o.raw = extracted_str -%}
+    {%- endif -%}
+  {%- else -%}
+    {%- set ns_o.raw = extracted_str -%}
+  {%- endif -%}
+
+  {%- set full_str = ns_o.raw if ns_o.raw else extracted_str -%}
+  {%- set ns_match = namespace(orcid='') -%}
+
+  {%- if '-' in full_str -%}
+    {%- set parts = full_str.split('-') -%}
+    {%- if parts | length >= 4 -%}
+      {%- for i in range(parts | length - 3) -%}
+        {%- set p0, p1, p2, p3 = parts[i] | trim, parts[i+1] | trim, parts[i+2] | trim, parts[i+3] | trim -%}
+        {%- if p0 | length >= 4 and p1 | length == 4 and p2 | length == 4 and p3 | length >= 4 -%}
+          {%- set candidate = p0[-4:] ~ '-' ~ p1 ~ '-' ~ p2 ~ '-' ~ p3[:4] -%}
+          {%- set cand_digits = candidate | replace('-', '') -%}
+          {%- if cand_digits[:15].isdigit() -%}
+            {%- set ns_match.orcid = candidate -%}
+          {%- endif -%}
+        {%- endif -%}
+      {%- endfor -%}
+    {%- endif -%}
+  {%- endif -%}
+
+  {%- if not ns_match.orcid -%}
+    {%- set ns_d = namespace(digits='') -%}
+    {%- for char in full_str -%}
+      {%- if char in '0123456789X' -%}
+        {%- set ns_d.digits = ns_d.digits ~ char -%}
+      {%- endif -%}
+    {%- endfor -%}
+    {%- if ns_d.digits | length == 16 and ns_d.digits[:15].isdigit() -%}
+      {%- set ns_match.orcid = ns_d.digits[:4] ~ '-' ~ ns_d.digits[4:8] ~ '-' ~ ns_d.digits[8:12] ~ '-' ~ ns_d.digits[12:16] -%}
+    {%- endif -%}
+  {%- endif -%}
+
+  {# Fallback: Return raw string if free-text answer #}
+  {%- set out = ns_match.orcid -%}
+  {%- if not out and full_str and full_str | length != 36 and not full_str.startswith('{') -%}
+    {%- set out = full_str | trim -%}
+  {%- endif -%}
+
+  {{ out }}
+{%- endmacro %}
+
+{% macro sanitize(val, fallback='') -%}
+  {%- set raw = resolve_one(val) if resolve_one is defined else val -%}
+  {%- set s = raw | string | trim -%}
+  {%- set text = extract_text(s) if extract_text is defined else s -%}
+  {%- set text = text | string -%}
+
+  {%- if '!' in text -%}
+    {%- set text = text.split('!')[0] -%}
+  {%- endif -%}
+
+  {%- set text = text | replace('****', '') | replace('**', '') | replace('&#34;', '') | replace('&quot;', '') | replace('&#39;', "'") | replace('&apos;', "'") | replace('[', '') | replace(']', '') | trim -%}
+  {%- set is_num = text.isdigit() -%}
+  {%- set is_uuid = (text | length == 36 and '-' in text) -%}
+  {%- set is_raw_object = text.startswith('{') or 'type:' in text or 'StringReply' in text or 'ClearReply' in text -%}
+
+  {%- if not text or is_num or is_uuid or is_raw_object or text | lower == 'n/a' -%}
+    {{ fallback | safe }}
+  {%- else -%}
+    {{ text | safe }}
+  {%- endif -%}
+{%- endmacro %}
+
+{%- set replies = ctx.questionnaire.replies -%}
+
+{# 1. Extracts plain text strings from Integration, Plain, or object types #}
+{%- macro extract_text(val) -%}
+  {%- if val is none -%}
+  {%- elif val is string or val is number -%}
+    {{ val | string | trim }}
+  {%- elif val is mapping -%}
+    {%- if 'value' in val and val['value'] is not none and (val['value'] | string | trim) != '' -%}
+      {{ extract_text(val['value']) }}
+    {%- elif 'label' in val and val['label'] is not none and (val['label'] | string | trim) != '' -%}
+      {{ extract_text(val['label']) }}
+    {%- elif 'title' in val and val['title'] is not none and (val['title'] | string | trim) != '' -%}
+      {{ extract_text(val['title']) }}
+    {%- elif 'name' in val and val['name'] is not none and (val['name'] | string | trim) != '' -%}
+      {{ extract_text(val['name']) }}
+    {%- else -%}
+      {{ val | string | trim }}
+    {%- endif -%}
+  {%- else -%}
+    {%- if val.value is defined and val.value is not none and (val.value | string | trim) != '' -%}
+      {{ extract_text(val.value) }}
+    {%- elif val.label is defined and val.label is not none and (val.label | string | trim) != '' -%}
+      {{ extract_text(val.label) }}
+    {%- elif val.title is defined and val.title is not none and (val.title | string | trim) != '' -%}
+      {{ extract_text(val.title) }}
+    {%- elif val.name is defined and val.name is not none and (val.name | string | trim) != '' -%}
+      {{ extract_text(val.name) }}
+    {%- else -%}
+      {{ val | string | trim }}
+    {%- endif -%}
+  {%- endif -%}
+{%- endmacro -%}
+
+{# 2. Resolves UUIDs against dataset name field, replies, or Knowledge Model choices/answers #}
+{%- macro resolve_one(val) -%}
+  {%- set val_raw = extract_text(val) | string | replace('&#34;', '"') | replace('&quot;', '"') | replace('&#39;', "'") | replace('&apos;', "'") | trim -%}
+  {%- set clean_uuid = val_raw | replace('[', '') | replace(']', '') | replace('"', '') | replace("'", '') | trim -%}
+  {%- set ns = namespace(out='') -%}
+
+  {%- if clean_uuid | length == 36 and '-' in clean_uuid -%}
+    {%- for k, v in replies.items() -%}
+      {%- if not ns.out and clean_uuid in k -%}
+        {%- if k.endswith('428a0c90-3aa8-408a-a663-712793e14d2d') -%}
+          {%- set sub_val = extract_text(v) | trim -%}
+          {%- if sub_val and sub_val != '' and sub_val != clean_uuid -%}
+            {%- set ns.out = sub_val -%}
+          {%- endif -%}
+        {%- endif -%}
+      {%- endif -%}
+    {%- endfor -%}
+
+    {%- if not ns.out -%}
+      {%- for k, v in replies.items() -%}
+        {%- if not ns.out and clean_uuid in k -%}
+          {%- set sub_val = extract_text(v) | trim -%}
+          {%- if sub_val and sub_val != '' and sub_val != clean_uuid and sub_val | length != 36 -%}
+            {%- set ns.out = sub_val -%}
+          {%- endif -%}
+        {%- endif -%}
+      {%- endfor -%}
+    {%- endif -%}
+
+    {%- if not ns.out -%}
+      {%- set km_sources = [
+        ctx.knowledgeModel if ctx.knowledgeModel is defined else {},
+        ctx.knowledgeModel.entities if (ctx.knowledgeModel is defined and ctx.knowledgeModel.entities is defined) else {},
+        ctx.entities if ctx.entities is defined else {},
+        ctx.km if ctx.km is defined else {},
+        ctx.km.entities if (ctx.km is defined and ctx.km.entities is defined) else {},
+        ctx.integrations if ctx.integrations is defined else {}
+      ] -%}
+
+      {%- for km in km_sources -%}
+        {%- if not ns.out and km is mapping -%}
+          {%- for key in ['choices', 'answers', 'items', 'integrations', 'options'] -%}
+            {%- if not ns.out and key in km -%}
+              {%- set container = km[key] -%}
+              {%- if container is mapping and clean_uuid in container -%}
+                {%- set ns.out = extract_text(container[clean_uuid]) | trim -%}
+              {%- elif container is iterable and container is not string and container is not mapping -%}
+                {%- for item in container -%}
+                  {%- if not ns.out and item is mapping -%}
+                    {%- if item.uuid is defined and item.uuid == clean_uuid -%}
+                      {%- set ns.out = extract_text(item) | trim -%}
+                    {%- elif item.id is defined and item.id == clean_uuid -%}
+                      {%- set ns.out = extract_text(item) | trim -%}
+                    {%- endif -%}
+                  {%- endif -%}
+                {%- endfor -%}
+              {%- endif -%}
+            {%- endif -%}
+          {%- endfor -%}
+        {%- endif -%}
+      {%- endfor -%}
+    {%- endif -%}
+
+    {%- if not ns.out -%}
+      {%- for k, v in replies.items() -%}
+        {%- if not ns.out and ((clean_uuid ~ '.') in k or k.startswith(clean_uuid ~ '.')) -%}
+          {%- set sub_str = extract_text(v) | trim -%}
+          {%- if sub_str and sub_str != '' and sub_str != clean_uuid and sub_str | length != 36 -%}
+            {%- set ns.out = sub_str -%}
+          {%- endif -%}
+        {%- endif -%}
+      {%- endfor -%}
+    {%- endif -%}
+  {%- endif -%}
+
+  {{ (ns.out if ns.out else val_raw) | safe }}
+{%- endmacro -%}
+
+{# 3. Fetches, resolves, and sanitizes single or list values #}
+{%- macro get_val(uuid) -%}
+  {%- set ns = namespace(replies=[]) -%}
+  {%- for k, v in replies.items() -%}
+    {%- if k.endswith(uuid) -%}
+      {%- set ns.replies = ns.replies + [v] -%}
+    {%- endif -%}
+  {%- endfor -%}
+
+  {%- if ns.replies | length > 0 -%}
+    {%- set ns_labels = namespace(list=[]) -%}
+    {%- for r in ns.replies -%}
+      {%- set item_list = r | reply_items if reply_items is defined else [] -%}
+      {%- if item_list and item_list | length > 0 -%}
+        {%- for item_id in item_list -%}
+          {%- set label = resolve_one(item_id) | trim -%}
+          {%- if label != '' -%}
+            {%- set ns_labels.list = ns_labels.list + [label] -%}
+          {%- endif -%}
+        {%- endfor -%}
+      {%- else -%}
+        {%- set label = resolve_one(r) | trim -%}
+        {%- if label != '' -%}
+          {%- set ns_labels.list = ns_labels.list + [label] -%}
+        {%- endif -%}
+      {%- endif -%}
+    {%- endfor -%}
+    {{ sanitize(ns_labels.list | join(', '), fallback='') }}
+  {%- endif -%}
+{%- endmacro -%}
+
+# PROJECT: {{ get_val('03bc384e-914c-4c93-94e9-f8e38ae99eac') }}
+
+Project Overview: {{ get_val('069c6907-ed6d-4b73-8ea6-fc9e77cdf6e1') }}
+
+---
+
+# DATASET NAME: {{ get_val('428a0c90-3aa8-408a-a663-712793e14d2d') }}
+
+## BASIC INFORMATION
+
+{% set ns_items = namespace(list=[]) -%}
+{%- for k, v in replies.items() -%}
+  {%- if k.endswith('11ee0c25-3017-4bd2-949d-c97439dffcb2') -%}
+    {%- set ns_items.list = v | reply_items -%}
+  {%- endif -%}
+{%- endfor -%}
+
+{%- set ns_auth = namespace(authors=[]) -%}
+{%- set ns_cont = namespace(contacts=[]) -%}
+
+{%- for item_id in ns_items.list -%}
+  {%- set ns_person = namespace(name='', orcid='', email='', is_contact=false) -%}
+
+  {%- for k, v in replies.items() -%}
+    {# Name #}
+    {%- if k.endswith(item_id ~ '.f97a43dc-adbf-4e80-95cd-a573d16d4473') -%}
+      {%- set ns_person.name = extract_text(v) | trim -%}
+    {%- endif -%}
+
+    {# ORCID #}
+    {%- if k.endswith(item_id ~ '.93527fac-690a-4fc6-941c-da8ffee332f3') -%}
+      {%- set ns_person.orcid = clean_orcid(v) | trim -%}
+    {%- endif -%}
+
+    {# Email #}
+    {%- if k.endswith(item_id ~ '.b78ae702-3958-497e-8b92-dbd90b9de23f') -%}
+      {%- set ns_person.email = extract_text(v) | trim -%}
+    {%- endif -%}
+
+    {# Contact Role #}
+    {%- if ('.' ~ item_id ~ '.') in k or k.endswith('.' ~ item_id) -%}
+      {%- set v_str = (v | reply_items | string) if reply_items is defined else (v | string) -%}
+      {%- if 'ef04c062-6faf-405e-8e01-44c52fafb188' in v_str -%}
+        {%- set ns_person.is_contact = true -%}
+      {%- endif -%}
+    {%- endif -%}
+  {%- endfor -%}
+
+  {%- if ns_person.name -%}
+    {# Format Author: Name (ORCID) #}
+    {%- set auth_entry = ns_person.name -%}
+    {%- if ns_person.orcid -%}
+      {%- set auth_entry = ns_person.name ~ ' (' ~ ns_person.orcid ~ ')' -%}
+    {%- endif -%}
+    {%- set ns_auth.authors = ns_auth.authors + [auth_entry] -%}
+
+    {# Format Main Contact: Name (ORCID, email) #}
+    {%- if ns_person.is_contact -%}
+      {%- set c_details = [] -%}
+      {%- if ns_person.orcid %}{% set c_details = c_details + [ns_person.orcid] %}{% endif -%}
+      {%- if ns_person.email %}{% set c_details = c_details + [ns_person.email] %}{% endif -%}
+      {%- set cont_entry = ns_person.name -%}
+      {%- if c_details | length > 0 -%}
+        {%- set cont_entry = ns_person.name ~ ' (' ~ (c_details | join(', ')) ~ ')' -%}
+      {%- endif -%}
+      {%- set ns_cont.contacts = ns_cont.contacts + [cont_entry] -%}
+    {%- endif -%}
+  {%- endif -%}
+{%- endfor -%}
+
+Author(s): {% if ns_auth.authors %}{{ ns_auth.authors | join(', ') | safe }}{% else %}[Author(s)]{% endif %}
+Main contact: {% if ns_cont.contacts %}{{ ns_cont.contacts | join(', ') | safe }}{% else %}[Main Contact]{% endif %}
+Dataset/collection license: {{ get_val('07cbba4a-e2a3-4dc9-b153-7da8ee5ac10b') }}
+README version: {{ ctx.document.createdAt | datetime_format("%Y.%m.%d-%H%M") }}
+PID: {{ get_val('040509af-4616-4683-9228-5b4c907ce4b2') }}
+Project website: {{ get_val('4f8a9683-b9f9-4af0-a8dd-c63b2c533e9b') }}
+
+---
+
+## DESCRIPTION
+
+### Brief Description
+
+{{ get_val('258c7868-be69-4810-a5ce-d26c19b54053') }}
+
+### Research Context
+Description: {{ get_val('6c1a6a0b-2525-4c0f-9afb-d5db065db8ab') }}
+
+### Related Publications
+
+{%- set ns_ds = namespace(items=[]) -%}
+{%- for k, v in replies.items() -%}
+  {%- if k.endswith('428a0c90-3aa8-408a-a663-712793e14d2d') -%}
+    {%- set parts = k.split('.') -%}
+    {%- if parts | length >= 2 -%}
+      {%- set ds_id = parts[-2] -%}
+      {%- if ds_id and ds_id not in ns_ds.items and ds_id | length == 36 and '-' in ds_id -%}
+        {%- set ns_ds.items = ns_ds.items + [ds_id] -%}
+      {%- endif -%}
+    {%- endif -%}
+  {%- endif -%}
+{%- endfor -%}
+
+{%- set ns_total = namespace(count=0) -%}
+
+{# Method 1: Iterating over discovered dataset items #}
+{%- if ns_ds.items | length > 0 -%}
+  {%- for ds_id in ns_ds.items -%}
+    {%- set ns_curr = namespace(ds_name='', pubs=[]) -%}
+    
+    {%- for k, v in replies.items() -%}
+      {%- if ('.' ~ ds_id ~ '.') in k or k.startswith(ds_id ~ '.') or k.endswith('.' ~ ds_id) -%}
+        {%- if k.endswith('428a0c90-3aa8-408a-a663-712793e14d2d') -%}
+          {%- set ns_curr.ds_name = resolve_one(v) | string | trim -%}
+        {%- endif -%}
+      {%- endif -%}
+    {%- endfor -%}
+
+    {%- set ns_pub_items = namespace(list=[]) -%}
+    {%- for k, v in replies.items() -%}
+      {%- if ('.' ~ ds_id ~ '.') in k or k.startswith(ds_id ~ '.') -%}
+        {%- if '3d0cf56d-aacd-4909-8bb7-73aed918c40e' in k or '09868614-f99f-456e-a642-779a0400cf90' in k -%}
+          {%- set parts = k.split('.') -%}
+          {%- set sub_id = parts[-2] if parts | length >= 2 else ds_id -%}
+          {%- if sub_id not in ns_pub_items.list -%}
+            {%- set ns_pub_items.list = ns_pub_items.list + [sub_id] -%}
+          {%- endif -%}
+        {%- endif -%}
+      {%- endif -%}
+    {%- endfor -%}
+
+    {%- for pub_id in ns_pub_items.list -%}
+      {%- set ns_p = namespace(name='', rel='') -%}
+      {%- for k, v in replies.items() -%}
+        {%- if ('.' ~ pub_id ~ '.') in k or k.startswith(pub_id ~ '.') or k.endswith('.' ~ pub_id) or pub_id == ds_id -%}
+          {%- if ('.' ~ ds_id ~ '.') in k or k.startswith(ds_id ~ '.') -%}
+            {%- if '3d0cf56d-aacd-4909-8bb7-73aed918c40e' in k -%}
+              {%- set ns_p.name = resolve_one(v) | string | trim -%}
+            {%- endif -%}
+            {%- if '09868614-f99f-456e-a642-779a0400cf90' in k -%}
+              {%- set ns_p.rel = resolve_one(v) | string | trim -%}
+            {%- endif -%}
+          {%- endif -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {%- if ns_p.name -%}
+        {%- set ns_curr.pubs = ns_curr.pubs + [{'name': ns_p.name, 'rel': ns_p.rel}] -%}
+      {%- endif -%}
+    {%- endfor -%}
+
+    {%- if ns_curr.ds_name and ns_curr.pubs | length > 0 -%}
+      {%- set ns_total.count = ns_total.count + (ns_curr.pubs | length) %}
+
+Dataset: {{ ns_curr.ds_name }}
+      {%- for p in ns_curr.pubs %}
+- {{ p.name }}{% if p.rel %} (Relationship: {{ p.rel }}){% endif %}
+      {%- endfor -%}
+    {%- endif -%}
+  {%- endfor -%}
+{%- endif -%}
+
+{# Method 2: Fallback mapping by index for comma-separated lists #}
+{%- if ns_total.count == 0 -%}
+  {%- set ds_names_str = get_val('428a0c90-3aa8-408a-a663-712793e14d2d') | trim -%}
+  {%- set pub_names_str = get_val('3d0cf56d-aacd-4909-8bb7-73aed918c40e') | trim -%}
+  {%- set pub_rels_str = get_val('09868614-f99f-456e-a642-779a0400cf90') | trim -%}
+
+  {%- if ds_names_str and pub_names_str -%}
+    {%- set ds_list = ds_names_str.split(',') -%}
+    {%- set pub_list = pub_names_str.split(',') -%}
+    {%- set rel_list = pub_rels_str.split(',') if pub_rels_str else [] -%}
+
+    {%- set ns_total.count = pub_list | length -%}
+    {%- for i in range(ds_list | length) -%}
+      {%- set ds_item = ds_list[i] | trim -%}
+      {%- set pub_item = pub_list[i] | trim if i < (pub_list | length) else '' -%}
+      {%- set rel_item = rel_list[i] | trim if i < (rel_list | length) else '' -%}
+      {%- if ds_item %}
+
+Dataset: {{ ds_item }}
+        {%- if pub_item %}
+- {{ pub_item }}{% if rel_item %} (Relationship: {{ rel_item }}){% endif %}
+        {%- else %}
+*None specified.*
+        {%- endif -%}
+      {%- endif -%}
+    {%- endfor -%}
+  {%- endif -%}
+{%- endif -%}
+{%- if ns_total.count == 0 %}
+*None specified.*
+{%- endif %}
+
+---
+
+## DATASET/COLLECTION CONTENTS
+
+### Directory Structure
+
+Data organization strategy: {{ get_val('ff38c067-8c68-4cf0-95dc-43c327a3ea54') }}
+
+### File Descriptions
+{# Define format questions with their display labels #}
+{%- set format_categories = [
+  {'label': 'Format of raw data', 'uuid': 'd3b36c72-98c9-44d8-97ee-ae7625a7f8af'},
+  {'label': 'Format for data manipulation of raw data', 'uuid': '657064ad-2c4d-4f8f-92be-82c6707c9add'},
+  {'label': 'Distribution of data', 'uuid': '212e9028-c005-40cc-9346-e15881d4a17b'},
+  {'label': 'Reused data', 'uuid': '9591484d-687a-402d-b963-a875e20c1805'},
+  {'label': 'Documentation', 'uuid': '19e1f27c-a6a0-446f-a887-4c036031fe30'}
+] -%}
+{%- set ns_formats = namespace(categories=[]) -%}
+{%- for cat in format_categories -%}
+  {%- set ns_cat = namespace(formats=[]) -%}
+  {%- for k, v in replies.items() -%}
+    {%- if k.endswith(cat.uuid) -%}
+      {%- set raw_val = v | reply_items if (v | reply_items) else v -%}
+      {%- if raw_val is mapping and 'value' in raw_val -%}
+        {%- set raw_val = raw_val['value'] -%}
+      {%- endif -%}
+
+      {%- set items_list = raw_val if (raw_val is iterable and raw_val is not string and raw_val is not mapping) else [raw_val] -%}
+
+      {%- for item in items_list -%}
+        {%- set fmt_resolved = resolve_one(item) | trim -%}
+        {%- set fmt_text = fmt_resolved if (fmt_resolved and (fmt_resolved | length != 36 or '-' not in fmt_resolved)) else extract_text(item) | trim -%}
+        {%- set clean_fmt = sanitize(fmt_text, fallback='') | trim -%}
+        {%- if clean_fmt and clean_fmt not in ns_cat.formats and (clean_fmt | length != 36 or '-' not in clean_fmt) -%}
+          {%- set ns_cat.formats = ns_cat.formats + [clean_fmt] -%}
+        {%- endif -%}
+      {%- endfor -%}
+    {%- endif -%}
+  {%- endfor -%}
+
+  {%- if ns_cat.formats | length > 0 -%}
+    {%- set ns_formats.categories = ns_formats.categories + [{'label': cat.label, 'formats': ns_cat.formats}] -%}
+  {%- endif -%}
+{%- endfor -%}
+
+{%- if ns_formats.categories | length > 0 %}
+Formats of datasets (reused or produced):
+{% for cat in ns_formats.categories -%}
+- {{ cat.label }}: {{ cat.formats | join(', ') | safe }}
+{% endfor -%}
+{%- endif %}
+
+### Naming Conventions
+
+{{ get_val('8c74b1f8-04db-4093-82aa-42798a4d9a07') }}
+
+---
+
+## DATA STRUCTURE (PLEASE ADD OR DELETE SECTION)
+
+### Encoding
+
+
+### Variable Descriptions
+
+
+### Special Values
+
+---
+
+## METHODOLOGY-PROVENANCE
+
+### Collection/Creation of Data & Processing
+
+- Original data (e.g. name & PID):
+{%- set ns_orig = namespace(items=[]) -%}
+{%- for k, v in replies.items() -%}
+  {%- if k.endswith('24b6d7a9-e036-4386-819b-697aec341c51') -%}
+    {%- set ns_orig.items = v | reply_items -%}
+  {%- endif -%}
+{%- endfor -%}
+
+{%- for item_id in ns_orig.items -%}
+  {%- set ns_item = namespace(name='', pid='') -%}
+  {%- for k, v in replies.items() -%}
+    {%- if k.endswith(item_id ~ '.68bee231-12c0-44b8-b6cc-45a9a74e51f7') -%}
+      {%- set ns_item.name = extract_text(v) | trim -%}
+    {%- endif -%}
+    {%- if (item_id ~ '.5b2f4c55-1535-4374-adfd-407477272b64') in k -%}
+      {%- set ns_item.pid = extract_text(v) | trim -%}
+    {%- endif -%}
+  {%- endfor %}
+  - {{ sanitize(ns_item.name, fallback='N/A') }}{% if ns_item.pid %} (PID: {{ sanitize(ns_item.pid, fallback='') }}){% endif %}
+{%- else %}
+  *None specified.*
+  
+{%- endfor %}
+
+- Collection location: (PLEASE ADD OR DELETE SECTION)
+
+- Tools for Collection:
+
+{%- set ns_tools = namespace(items=[]) -%}
+{%- for k, v in replies.items() -%}
+  {%- if k.endswith('b445defa-9a25-44af-bf10-44a65623ee9b') -%}
+    {%- set ns_tools.items = v | reply_items -%}
+  {%- endif -%}
+{%- endfor -%}
+
+{%- for item_id in ns_tools.items -%}
+  {%- set ns_tool = namespace(name='', description='', location='') -%}
+  {%- for k, v in replies.items() -%}
+    {# 1. Tool Name #}
+    {%- if k.endswith(item_id ~ '.e9d3b73c-a132-4995-b5fe-293bca5045c3') -%}
+      {%- set ns_tool.name = v -%}
+    {%- endif -%}
+    {# 2. Tool Description #}
+    {%- if k.endswith(item_id ~ '.d4c152eb-b6b0-4df2-8169-51f80ae5fdfd') -%}
+      {%- set ns_tool.description = v -%}
+    {%- endif -%}
+    {# 3. Location #}
+    {%- if k.endswith(item_id ~ '.965ea8ee-d917-4e3d-b294-ecbe69dea007') -%}
+      {%- set ns_tool.location = v -%}
+    {%- endif -%}
+  {%- endfor %}
+
+- Tool Name: {{ sanitize(ns_tool.name, fallback='N/A') }}
+  - Description: {{ sanitize(ns_tool.description, fallback='N/A') }}
+  - Location: {{ sanitize(ns_tool.location, fallback='N/A') }}
+{%- else %}
+
+*No tools for collection specified.*
+{%- endfor %}
+
+### Methods of Collection/Production
+
+{% set ns_methods = namespace(items=[]) -%}
+{%- for k, v in replies.items() -%}
+  {%- if k.endswith('5b1728ac-913e-434d-a2bc-741c2be8c883') -%}
+    {%- set ns_methods.items = v | reply_items -%}
+  {%- endif -%}
+{%- endfor -%}
+
+{% for item_id in ns_methods.items %}
+  {%- set ns_m = namespace(method='', choice='', raw_datasets=[], start='', end='') -%}
+  
+  {%- for k, v in replies.items() -%}
+    {%- if item_id in k -%}
+      {# 1. Method Name #}
+      {%- if k.endswith('d2098bc8-d3d4-45bc-b5f2-b395e12c5103') -%}
+        {%- set ns_m.method = v -%}
+      {%- endif -%}
+
+      {# 2. Scope Choice #}
+      {%- if k.endswith('0c88f0a5-92cf-4e82-b528-6bdcf3a0bc8c') -%}
+        {%- set ns_m.choice = resolve_one(v) | trim -%}
+      {%- endif -%}
+
+      {# 3. Specific Datasets Item Select #}
+      {%- if k.endswith('6325b33d-b940-4cc2-9abc-1f859d06e63e') -%}
+        {%- set ds_items = v | reply_items -%}
+        {%- if ds_items and ds_items | length > 0 -%}
+          {%- for ds_item in ds_items -%}
+            {%- set ns_m.raw_datasets = ns_m.raw_datasets + [ds_item] -%}
+          {%- endfor -%}
+        {%- else -%}
+          {%- set ns_m.raw_datasets = ns_m.raw_datasets + [v] -%}
+        {%- endif -%}
+      {%- endif -%}
+
+      {# 4. Direct Sub-question Dates #}
+      {%- if k.endswith('daed5011-cbc9-4bc3-a4e9-33cd6ac98224') -%}
+        {%- set ns_m.start = extract_text(v) | trim -%}
+      {%- endif -%}
+      {%- if k.endswith('28c7dad9-dacb-468d-8d57-3e36978e9f00') -%}
+        {%- set ns_m.end = extract_text(v) | trim -%}
+      {%- endif -%}
+    {%- endif -%}
+  {%- endfor -%}
+
+  {# Fallback: Linked date items via method reference #}
+  {%- if not ns_m.start and not ns_m.end -%}
+    {%- for k, v in replies.items() -%}
+      {%- if k.endswith('e7f503a7-7f33-47dc-b1fb-fa1934e24bcd') -%}
+        {%- set method_ref = resolve_one(v) | trim -%}
+        {%- set current_method_name = resolve_one(ns_m.method) | trim -%}
+        {%- if method_ref and (method_ref == item_id or method_ref == current_method_name) -%}
+          {%- set parts = k.split('.') -%}
+          {%- if parts | length > 1 -%}
+            {%- set date_item_id = parts[-2] -%}
+            {%- for dk, dv in replies.items() -%}
+              {%- if dk.endswith(date_item_id ~ '.daed5011-cbc9-4bc3-a4e9-33cd6ac98224') -%}
+                {%- set ns_m.start = extract_text(dv) | trim -%}
+              {%- endif -%}
+              {%- if dk.endswith(date_item_id ~ '.28c7dad9-dacb-468d-8d57-3e36978e9f00') -%}
+                {%- set ns_m.end = extract_text(dv) | trim -%}
+              {%- endif -%}
+            {%- endfor -%}
+          {%- endif -%}
+        {%- endif -%}
+      {%- endif -%}
+    {%- endfor -%}
+  {%- endif -%}
+
+  {# Resolve raw datasets to human readable names #}
+  {%- set ns_ds_names = namespace(list=[]) -%}
+  {%- for ds_raw in ns_m.raw_datasets -%}
+    {%- set ds_name = sanitize(ds_raw, fallback='') | trim -%}
+    {%- if ds_name and ds_name not in ns_ds_names.list -%}
+      {%- set ns_ds_names.list = ns_ds_names.list + [ds_name] -%}
+    {%- endif -%}
+  {%- endfor -%}
+
+  {# Determine display output for datasets #}
+  {%- if ns_m.choice and ('yes' in ns_m.choice | lower or 'all' in ns_m.choice | lower) -%}
+    {%- set ds_display = 'Applicable for all datasets' -%}
+  {%- elif ns_ds_names.list | length > 0 -%}
+    {%- set ds_display = ns_ds_names.list | join(', ') -%}
+  {%- else -%}
+    {%- set ds_display = 'Applicable for all datasets' -%}
+  {%- endif -%}
+
+  {# Determine display output for collection dates #}
+  {%- set date_display = '' -%}
+  {%- if ns_m.start and ns_m.end -%}
+    {%- set date_display = 'from ' ~ ns_m.start ~ ' to ' ~ ns_m.end -%}
+  {%- elif ns_m.start -%}
+    {%- set date_display = 'from ' ~ ns_m.start -%}
+  {%- elif ns_m.end -%}
+    {%- set date_display = 'to ' ~ ns_m.end -%}
+  {%- endif -%}
+
+-  Method:  {{ sanitize(ns_m.method, fallback='N/A') }}
+  -  Used for datasets:  {{ ds_display | safe }}
+  {%- if date_display %}
+  -  Collection date:  {{ date_display }}
+  {%- endif %}
+
+{% else %}
+*No methods of collection/production specified.*
+{% endfor %}
+### Data Completeness (PLEASE ADD OR DELETE SECTION)
+
+---
+
+## REUSE
+
+### License and Terms of Use
+{%- set ns_meta = namespace(cc0=false, scope_all=false, scope_specific=false, datasets=[]) -%}
+{%- for k, v in replies.items() -%}
+  {# Check CC0 license question (5876f65b-be89-4200-9584-ed01e9b2aadc) for "Yes" answer (5196b6bf-b9c9-4914-ac45-b558e6ebbdb2) #}
+  {%- if k.endswith('5876f65b-be89-4200-9584-ed01e9b2aadc') -%}
+    {%- set v_str = v | string -%}
+    {%- set v_resolved = resolve_one(v) | trim | lower -%}
+    {%- if '5196b6bf-b9c9-4914-ac45-b558e6ebbdb2' in v_str or v_resolved == 'yes' -%}
+      {%- set ns_meta.cc0 = true -%}
+    {%- endif -%}
+  {%- endif -%}
+
+  {# Check Scope question (23dc3104-708c-4e5b-a419-1248c4983909) #}
+  {%- if k.endswith('23dc3104-708c-4e5b-a419-1248c4983909') -%}
+    {%- set scope_val = v | string -%}
+    {%- if '4723412b-4018-44cf-97a3-5028befcc96a' in scope_val or 'all' in (resolve_one(v) | lower) -%}
+      {%- set ns_meta.scope_all = true -%}
+    {%- elif '3b356613-9b13-42b9-82f0-7699823978eb' in scope_val or '61c7a127-db90-4851-9121-c21863decdf7' in scope_val -%}
+      {%- set ns_meta.scope_specific = true -%}
+    {%- endif -%}
+  {%- endif -%}
+
+  {# Collect selected specific datasets #}
+  {%- if k.endswith('ab9c58b1-b773-4515-9700-b361e7b25b6a') or k.endswith('bde3f4ca-3086-41cb-80bb-a7702c23cee6') -%}
+    {%- set raw_ds_val = v | reply_items if (v | reply_items) else v -%}
+    {%- if raw_ds_val is mapping and 'value' in raw_ds_val -%}
+      {%- set raw_ds_val = raw_ds_val['value'] -%}
+    {%- endif -%}
+
+    {%- set ds_list = raw_ds_val if (raw_ds_val is iterable and raw_ds_val is not string and raw_ds_val is not mapping) else [raw_ds_val] -%}
+
+    {%- for ds_item in ds_list -%}
+      {%- set ds_str = extract_text(ds_item) | string | replace('&#34;', '"') | replace('&quot;', '"') | replace('&#39;', "'") | replace('&apos;', "'") | replace('[', '') | replace(']', '') | trim -%}
+      {%- set sub_ds_items = ds_str.split(',') if ',' in ds_str else [ds_str] -%}
+      {%- for sub_ds in sub_ds_items -%}
+        {%- set clean_sub = sanitize(sub_ds, fallback='') | trim -%}
+        {%- if clean_sub and clean_sub not in ns_meta.datasets -%}
+          {%- set ns_meta.datasets = ns_meta.datasets + [clean_sub] -%}
+        {%- endif -%}
+      {%- endfor -%}
+    {%- endfor -%}
+  {%- endif -%}
+{%- endfor -%}
+
+{%- set meta_sentences = [] -%}
+{%- if ns_meta.cc0 -%}
+  {%- set meta_sentences = meta_sentences + ['The metadata will be licensed CC0.'] -%}
+{%- endif -%}
+
+{%- if ns_meta.scope_all -%}
+  {%- set meta_sentences = meta_sentences + ['The metadata are relevant to all datasets.'] -%}
+{%- elif ns_meta.scope_specific or ns_meta.datasets | length > 0 -%}
+  {%- if ns_meta.datasets | length > 0 -%}
+    {%- set meta_sentences = meta_sentences + ['The metadata are relevant to the following datasets: ' ~ (ns_meta.datasets | join(', ')) ~ '.'] -%}
+  {%- else -%}
+    {%- set meta_sentences = meta_sentences + ['The metadata are relevant to specific datasets.'] -%}
+  {%- endif -%}
+{%- endif -%}
+
+{%- if meta_sentences | length > 0 %}
+
+{{ meta_sentences | join(' ') | safe }}
+{%- endif -%}
+
+{# 2. Distribution Licenses Discovery & Loop #}
+{%- set ns_dists = namespace(items=[]) -%}
+{%- for k, v in replies.items() -%}
+  {# Discover top-level distribution items ONLY #}
+  {%- if k.endswith('3bb3bf13-3adc-4fe2-93d5-94de606543d3') or k.endswith('523b25b0-baa7-489b-8139-9e0e2c9bfebe') or k.endswith('cca825e4-5c84-4290-865a-88eeba3867ba') -%}
+    {%- set parts = k.split('.') -%}
+    {%- if parts | length >= 2 -%}
+      {%- set dist_item_id = parts[-2] -%}
+      {%- if dist_item_id and dist_item_id not in ns_dists.items -%}
+        {%- set ns_dists.items = ns_dists.items + [dist_item_id] -%}
+      {%- endif -%}
+    {%- endif -%}
+  {%- endif -%}
+{%- endfor -%}
+
+{%- if ns_dists.items | length > 0 -%}
+  {%- for item_id in ns_dists.items -%}
+    {%- set ns_d = namespace(name='', lic_items=[], dataset_names=[]) -%}
+    {%- for k, v in replies.items() -%}
+      {%- if ('.' ~ item_id ~ '.') in k or k.startswith(item_id ~ '.') -%}
+        {# Distribution Name (3bb3bf13-3adc-4fe2-93d5-94de606543d3) #}
+        {%- if k.endswith('3bb3bf13-3adc-4fe2-93d5-94de606543d3') -%}
+          {%- set clean_name = sanitize(v, fallback='') | trim -%}
+          {%- if clean_name -%}
+            {%- set ns_d.name = clean_name -%}
+          {%- endif -%}
+
+        {# Direct License Extraction (07cbba4a-e2a3-4dc9-b153-7da8ee5ac10b or 30769cc8-f18d-451d-90dd-a66db1001223) #}
+        {%- elif k.endswith('07cbba4a-e2a3-4dc9-b153-7da8ee5ac10b') or k.endswith('30769cc8-f18d-451d-90dd-a66db1001223') -%}
+          {%- set raw_lic_val = v | reply_items if (v | reply_items) else v -%}
+          {%- if raw_lic_val is mapping and 'value' in raw_lic_val -%}
+            {%- set raw_lic_val = raw_lic_val['value'] -%}
+          {%- endif -%}
+
+          {%- set lic_list = raw_lic_val if (raw_lic_val is iterable and raw_lic_val is not string and raw_lic_val is not mapping) else [raw_lic_val] -%}
+
+          {%- for lic_item in lic_list -%}
+            {%- set lic_str = extract_text(lic_item) | string | replace('&#34;', '"') | replace('&quot;', '"') | replace('&#39;', "'") | replace('&apos;', "'") | replace('[', '') | replace(']', '') | trim -%}
+            {%- set sub_lic_items = lic_str.split(',') if ',' in lic_str else [lic_str] -%}
+            {%- for sub_lic in sub_lic_items -%}
+              {%- set lic_text = sanitize(sub_lic, fallback='') | trim -%}
+              {%- if lic_text and lic_text not in ns_d.lic_items -%}
+                {%- set ns_d.lic_items = ns_d.lic_items + [lic_text] -%}
+              {%- endif -%}
+            {%- endfor -%}
+          {%- endfor -%}
+        
+        {# Relevant Datasets Question (523b25b0-baa7-489b-8139-9e0e2c9bfebe or cca825e4-5c84-4290-865a-88eeba3867ba) #}
+        {%- elif k.endswith('523b25b0-baa7-489b-8139-9e0e2c9bfebe') or k.endswith('cca825e4-5c84-4290-865a-88eeba3867ba') -%}
+          {%- set raw_ds_val = v | reply_items if (v | reply_items) else v -%}
+          {%- if raw_ds_val is mapping and 'value' in raw_ds_val -%}
+            {%- set raw_ds_val = raw_ds_val['value'] -%}
+          {%- endif -%}
+
+          {%- set ds_list = raw_ds_val if (raw_ds_val is iterable and raw_ds_val is not string and raw_ds_val is not mapping) else [raw_ds_val] -%}
+
+          {%- for ds_item in ds_list -%}
+            {%- set ds_str = extract_text(ds_item) | string | replace('&#34;', '"') | replace('&quot;', '"') | replace('&#39;', "'") | replace('&apos;', "'") | replace('[', '') | replace(']', '') | trim -%}
+            {%- set sub_ds_items = ds_str.split(',') if ',' in ds_str else [ds_str] -%}
+            {%- for sub_ds in sub_ds_items -%}
+              {%- set ds_resolved = sanitize(sub_ds, fallback='') | trim -%}
+              {%- if ds_resolved and ds_resolved not in ns_d.dataset_names -%}
+                {%- set ns_d.dataset_names = ns_d.dataset_names + [ds_resolved] -%}
+              {%- endif -%}
+            {%- endfor -%}
+          {%- endfor -%}
+        {%- endif -%}
+      {%- endif -%}
+    {%- endfor -%}
+
+    {%- set final_lic = ns_d.lic_items | join(', ') -%}
+    {%- set final_dist_name = sanitize(ns_d.name, fallback='N/A') | trim -%}
+
+    {%- if final_lic or ns_d.dataset_names | length > 0 or final_dist_name != 'N/A' %}
+
+The license assigned to the distribution "{{ final_dist_name }}" : {{ final_lic if final_lic else 'N/A' }}.{% if ns_d.dataset_names | length > 0 %} This distribution is relevant for the datasets: {{ ns_d.dataset_names | join(', ') | safe }}.{% endif %}
+    {%- endif -%}
+  {%- endfor -%}
+{%- endif %}
+
+### Restrictions and Recommendations
+
+{% set ns_reused = namespace(items=[]) -%}
+
+{# 1. Discover item IDs STRICTLY from Dataset Name question (68bee231-12c0-44b8-b6cc-45a9a74e51f7) #}
+{%- for k, v in replies.items() -%}
+  {%- if k.endswith('68bee231-12c0-44b8-b6cc-45a9a74e51f7') -%}
+    {%- set parts = k.split('.') -%}
+    {%- if parts | length >= 2 -%}
+      {%- set item_id = parts[-2] -%}
+      {%- if item_id and item_id not in ns_reused.items -%}
+        {%- set ns_reused.items = ns_reused.items + [item_id] -%}
+      {%- endif -%}
+    {%- endif -%}
+  {%- endif -%}
+{%- endfor -%}
+
+{%- set ns_out = namespace(has_printed=false) -%}
+
+{# 2. Render each discovered dataset #}
+{%- for item_id in ns_reused.items -%}
+  {%- set ns_r = namespace(
+        ds_name='', 
+        main_choice_raw='', 
+        main_choice_label='', 
+        restr_choice_raw='', 
+        restr_choice_label='', 
+        custom_text='',
+        d838_val=''
+      ) -%}
+  
+  {%- for k, v in replies.items() -%}
+    {%- if ('.' ~ item_id ~ '.') in k or k.startswith(item_id ~ '.') -%}
+      {# Dataset Name (68bee231-12c0-44b8-b6cc-45a9a74e51f7) #}
+      {%- if k.endswith('68bee231-12c0-44b8-b6cc-45a9a74e51f7') -%}
+        {%- set ns_r.ds_name = sanitize(v, fallback='') | trim -%}
+      
+      {# Main Restrictions Choice Question (3cb234c5-1795-40f2-b3e0-6e2d27d8fd48) #}
+      {%- elif k.endswith('3cb234c5-1795-40f2-b3e0-6e2d27d8fd48') -%}
+        {%- set ns_r.main_choice_raw = v | string -%}
+        {%- set ns_r.main_choice_label = sanitize(v, fallback='') | trim -%}
+      
+      {# Restrictions Follow-up Value (d8388030-5bd4-4fc9-9a86-b0f8736bc64e) #}
+      {%- elif k.endswith('d8388030-5bd4-4fc9-9a86-b0f8736bc64e') -%}
+        {%- set ns_r.d838_val = sanitize(v, fallback='') | trim -%}
+
+      {# Restrictions Choice (956cc054-96f4-4225-baa8-aeafa13dca1a) #}
+      {%- elif k.endswith('956cc054-96f4-4225-baa8-aeafa13dca1a') -%}
+        {%- set ns_r.restr_choice_raw = v | string -%}
+        {%- set ns_r.restr_choice_label = sanitize(v, fallback='') | trim -%}
+      
+      {# Follow-up Custom Text Answer (4a3d83d4-9fb2-4fb6-a71b-8ae0a6600efe) #}
+      {%- elif k.endswith('4a3d83d4-9fb2-4fb6-a71b-8ae0a6600efe') -%}
+        {%- set ns_r.custom_text = sanitize(v, fallback='') | trim -%}
+      {%- endif -%}
+    {%- endif -%}
+  {%- endfor -%}
+
+  {# Only render if a dataset name is present #}
+  {%- if ns_r.ds_name -%}
+    {# Check if restricted choice (1a805c94-8d95-4a8e-821f-7d6869aabe69) was selected #}
+    {%- set is_restricted_choice = '1a805c94-8d95-4a8e-821f-7d6869aabe69' in ns_r.main_choice_raw -%}
+
+    {%- if is_restricted_choice -%}
+      {%- set raw_restr = ns_r.restr_choice_label if ns_r.restr_choice_label else ns_r.d838_val -%}
+      {%- set clean_restr = raw_restr[:-1] if raw_restr.endswith('.') else raw_restr -%}
+      {%- set is_specific_text_choice = '6fb4cf56-fcb6-45b3-a434-99cfc8a72307' in ns_r.restr_choice_raw -%}
+      
+      {%- if clean_restr or ns_r.custom_text %}
+The reused dataset "{{ ns_r.ds_name }}" is available under the following restrictions: {{ clean_restr }}{% if is_specific_text_choice and ns_r.custom_text %}: {{ ns_r.custom_text }}{% endif %}.
+      {%- endif -%}
+    {%- else -%}
+      {%- set clean_main = ns_r.main_choice_label | trim -%}
+      {%- if clean_main and clean_main | lower != 'n/a' and clean_main | lower != 'none' -%}
+        {%- set ns_out.has_printed = true -%}
+The reused dataset "{{ ns_r.ds_name }}": {{ clean_main }}.
+      {%- endif -%}
+    {%- endif -%}
+  {%- endif -%}
+{% endfor %}
+
+### Software and Hardware Requirements
+
+{#- Discover all Software Tool list items using question 95aeb038-8ce1-4e49-8326-3929376af54e -#}
+{%- set ns_tools = namespace(items=[]) -%}
+{%- for k, v in replies.items() -%}
+  {%- if k.endswith('95aeb038-8ce1-4e49-8326-3929376af54e') -%}
+    {%- set parts = k.split('.') -%}
+    {%- if parts | length >= 2 -%}
+      {%- set item_id = parts[-2] -%}
+      {%- if item_id not in ns_tools.items -%}
+        {%- set ns_tools.items = ns_tools.items + [item_id] -%}
+      {%- endif -%}
+    {%- endif -%}
+  {%- endif -%}
+{%- endfor -%}
+
+{%- if ns_tools.items | length > 0 %}
+
+Specialized tools are needed for the reuse of data:
+
+{% for item_id in ns_tools.items -%}
+  {%- set ns_t = namespace(name='', desc='', open='', pid='', scope_raw='', dataset_names=[]) -%}
+  {%- for k, v in replies.items() -%}
+    {%- if ('.' ~ item_id ~ '.') in k or k.startswith(item_id ~ '.') -%}
+      {%- if k.endswith('95aeb038-8ce1-4e49-8326-3929376af54e') -%}
+        {%- set ns_t.name = sanitize(v, fallback='') | trim -%}
+      {%- elif k.endswith('1b6586c8-396d-442c-b76c-9b1da957e700') -%}
+        {%- set ns_t.desc = sanitize(v, fallback='') | trim -%}
+      {%- elif k.endswith('55a60078-6bef-40a9-bf6f-8f8cb2dccaed') -%}
+        {%- set ns_t.open = sanitize(v, fallback='') | trim -%}
+      {%- elif k.endswith('0168bb45-2865-4ee2-ac84-fa1138273351') -%}
+        {%- set ns_t.pid = sanitize(v, fallback='') | trim -%}
+      {%- elif k.endswith('4772ef15-fe6b-4685-af9e-0a0faa29b5b9') -%}
+        {%- set ns_t.scope_raw = extract_text(v) | trim -%}
+      {%- elif k.endswith('5490d038-0469-4e84-ba0d-b3d3a6a6b5a7') or k.endswith('523859dd-cdab-4646-97f1-4231fff0154f') -%}
+        {%- set raw_ds_val = v | reply_items if (v | reply_items) else v -%}
+        {%- if raw_ds_val is mapping and 'value' in raw_ds_val -%}
+          {%- set raw_ds_val = raw_ds_val['value'] -%}
+        {%- endif -%}
+
+        {%- set ds_list = raw_ds_val if (raw_ds_val is iterable and raw_ds_val is not string and raw_ds_val is not mapping) else [raw_ds_val] -%}
+
+        {%- for ds_item in ds_list -%}
+          {%- set ds_str = extract_text(ds_item) | string | replace('&#34;', '"') | replace('&quot;', '"') | replace('&#39;', "'") | replace('&apos;', "'") | replace('[', '') | replace(']', '') | trim -%}
+          {%- set sub_ds_items = ds_str.split(',') if ',' in ds_str else [ds_str] -%}
+          {%- for sub_ds in sub_ds_items -%}
+            {%- set clean_sub = sanitize(sub_ds, fallback='') | trim -%}
+            {%- if clean_sub and clean_sub not in ns_t.dataset_names and (clean_sub | length != 36 or '-' not in clean_sub) -%}
+              {%- set ns_t.dataset_names = ns_t.dataset_names + [clean_sub] -%}
+            {%- endif -%}
+          {%- endfor -%}
+        {%- endfor -%}
+      {%- endif -%}
+    {%- endif -%}
+  {%- endfor -%}
+
+  {#- Format PID & Open Availability -#}
+  {%- set clean_pid = ns_t.pid | trim -%}
+  {%- set has_valid_pid = clean_pid and (clean_pid | lower not in ['no', 'none', 'n/a', 'false']) -%}
+  {%- set avail_clean = ns_t.open | trim | lower -%}
+  {%- set avail_text = '' -%}
+  {%- if avail_clean in ['yes', 'true'] or 'openly available' in avail_clean -%}
+    {%- set avail_text = 'The tool is openly available' -%}
+  {%- elif avail_clean in ['no', 'false'] or 'not openly' in avail_clean -%}
+    {%- set avail_text = 'The tool is not openly available' -%}
+  {%- elif ns_t.open -%}
+    {%- set avail_text = ns_t.open -%}
+  {%- endif -%}
+
+  {#- Format Dataset Scope (4772ef15-fe6b-4685-af9e-0a0faa29b5b9) -#}
+  {%- set scope_text = '' -%}
+  {%- if '0fa28cf2-f972-4111-a6d1-fbc936827bd6' in ns_t.scope_raw or 'all' in (resolve_one(ns_t.scope_raw) | lower) -%}
+    {%- set scope_text = 'The tool is necessary for the reuse of all datasets.' -%}
+  {%- elif '7d3e1a23-296f-4fe5-ade8-50dd6472daf8' in ns_t.scope_raw or ns_t.dataset_names | length > 0 -%}
+    {%- if ns_t.dataset_names | length > 0 -%}
+      {%- set scope_text = 'This tool is necessary for the reuse of the datasets: ' ~ (ns_t.dataset_names | join(', ')) -%}
+    {%- else -%}
+      {%- set scope_text = 'This tool is necessary for the reuse of specific datasets.' -%}
+    {%- endif -%}
+  {%- endif -%}
+
+- Tool Name: {{ ns_t.name if ns_t.name else 'N/A' }}
+  {%- if ns_t.desc %}
+  -  Description:  {{ ns_t.desc }}
+  {%- endif %}
+  {%- if avail_text or has_valid_pid %}
+  -  Availability:  {{ avail_text if avail_text else 'N/A' }}{% if has_valid_pid %} (PID: {{ clean_pid }}){% endif %}
+  {%- endif %}
+  {%- if scope_text %}
+  -  {{ scope_text | safe }}
+  {%- endif %}
+
+{% endfor -%}
+{%- else -%}
+{%- set no_tools_reason = resolve_one(get_val('ed5dbe1b-ba4b-4600-8898-435af63d78ab')) | trim -%}
+{%- if no_tools_reason %}
+
+No specialized tools are required due to the following reason: {{ no_tools_reason }}
+{%- else %}
+
+No specialized tools are required for the reuse of data.
+{%- endif -%}
+{%- endif %}
+---
+## PROPOSED CITATION
+{# Collect all dataset citations using question 37a38895-854e-4eea-a276-a2d3b0b9b24c #}
+{%- set ns_citations = namespace(items=[]) -%}
+{%- for k, v in replies.items() -%}
+  {%- if k.endswith('37a38895-854e-4eea-a276-a2d3b0b9b24c') -%}
+    {%- set citation_text = sanitize(v, fallback='') | trim -%}
+    {%- if citation_text and citation_text not in ns_citations.items -%}
+      {%- set ns_citations.items = ns_citations.items + [citation_text] -%}
+    {%- endif -%}
+  {%- endif -%}
+{%- endfor -%}
+
+{%- if ns_citations.items | length > 0 %}
+{% for citation in ns_citations.items -%}
+- {{ citation }}
+{% endfor -%}
+{%- endif %}
+---
+
+## ETHICS AND DATA PROTECTION
+
+### Personal and Sensitive Data Protection
+{# --- SENSITIVE & PERSONAL DATA PER DATASET --- #}
+{%- set ns_sens = namespace(items=[]) -%}
+
+{# 1. Discover Dataset Item IDs from question 68bee231-12c0-44b8-b6cc-45a9a74e51f7 #}
+{%- for k, v in replies.items() -%}
+  {%- if k.endswith('68bee231-12c0-44b8-b6cc-45a9a74e51f7') -%}
+    {%- set parts = k.split('.') -%}
+    {%- if parts | length >= 2 -%}
+      {%- set item_id = parts[-2] -%}
+      {%- if item_id and item_id not in ns_sens.items and item_id | length == 36 and '-' in item_id -%}
+        {%- set ns_sens.items = ns_sens.items + [item_id] -%}
+      {%- endif -%}
+    {%- endif -%}
+  {%- endif -%}
+{%- endfor -%}
+
+{%- set ns_out = namespace(has_printed=false) -%}
+
+{# 2. Item-based discovery loop #}
+{%- if ns_sens.items | length > 0 -%}
+  {% for item_id in ns_sens.items -%}
+    {%- set ns_item = namespace(
+          ds_name='', 
+          is_sensitive=false, 
+          has_personal=false, 
+          no_personal=false
+        ) -%}
+    
+    {%- for k, v in replies.items() -%}
+      {%- if ('.' ~ item_id ~ '.') in k or k.startswith(item_id ~ '.') -%}
+        {# Dataset Name #}
+        {%- if k.endswith('68bee231-12c0-44b8-b6cc-45a9a74e51f7') -%}
+          {%- set ns_item.ds_name = sanitize(v, fallback='') | trim -%}
+        {%- endif -%}
+
+        {# Sensitive reused data choice 2dd4e23a-4f42-4231-be7f-7e8ba2b22f20 #}
+        {%- if '2dd4e23a-4f42-4231-be7f-7e8ba2b22f20' in (v | string) -%}
+          {%- set ns_item.is_sensitive = true -%}
+        {%- endif -%}
+
+        {# Personal reused data options question 79094b9c-b272-486b-8df2-a7a242b5b3da #}
+        {%- if '2de9f569-71bc-4010-9e79-997a85d181e6' in (v | string) -%}
+          {%- set ns_item.has_personal = true -%}
+        {%- elif '5bbbf8ac-25f2-48a0-9bc1-15ce3bfd788b' in (v | string) -%}
+          {%- set ns_item.no_personal = true -%}
+        {%- endif -%}
+      {%- endif -%}
+    {%- endfor -%}
+
+    {%- if ns_item.ds_name and ns_item.is_sensitive -%}
+      {%- set ns_out.has_printed = true -%}
+      {%- set personal_text = '' -%}
+      {%- if ns_item.has_personal -%}
+        {%- set personal_text = ' The reused dataset contains personal data.' -%}
+      {%- elif ns_item.no_personal -%}
+        {%- set personal_text = ' The reused dataset does not contain personal data.' -%}
+      {%- endif %}
+The reused dataset "{{ ns_item.ds_name }}" contains sensitive data.{{ personal_text }}
+    {%- endif -%}
+  {% endfor -%}
+{%- endif -%}
+
+{# 3. Fallback for single/flat answer structure #}
+{%- if not ns_out.has_printed -%}
+  {%- set ds_single_name = get_val('68bee231-12c0-44b8-b6cc-45a9a74e51f7') | trim -%}
+  {%- set ns_single = namespace(is_sens=false, has_pers=false, no_pers=false) -%}
+
+  {%- for k, v in replies.items() -%}
+    {%- set v_str = v | string -%}
+    {%- if '2dd4e23a-4f42-4231-be7f-7e8ba2b22f20' in v_str -%}
+      {%- set ns_single.is_sens = true -%}
+    {%- endif -%}
+    {%- if '2de9f569-71bc-4010-9e79-997a85d181e6' in v_str -%}
+      {%- set ns_single.has_pers = true -%}
+    {%- elif '5bbbf8ac-25f2-48a0-9bc1-15ce3bfd788b' in v_str -%}
+      {%- set ns_single.no_pers = true -%}
+    {%- endif -%}
+  {%- endfor -%}
+
+  {%- if ds_single_name and ns_single.is_sens -%}
+    {%- set pers_single_text = '' -%}
+    {%- if ns_single.has_pers -%}
+      {%- set pers_single_text = ' The reused dataset contains personal data.' -%}
+    {%- elif ns_single.no_pers -%}
+      {%- set pers_single_text = ' The reused dataset does not contain personal data.' -%}
+    {%- endif %}
+The reused dataset "{{ ds_single_name }}" contains sensitive data.{{ pers_single_text }}
+
+  {% endif %}
+{% endif %}
+
+{# --- DATA COLLECTION - SENSITIVE DATA BLOCK --- #}
+{%- set ns_sens = namespace(items=[]) -%}
+
+{# 1. Discover Item IDs containing sensitive data trigger (93d6fe6e-256a-4888-8c09-9b885f8f0b20) #}
+{%- for k, v in replies.items() -%}
+  {%- set v_str = v | string -%}
+  {%- if '93d6fe6e-256a-4888-8c09-9b885f8f0b20' in v_str or k.endswith('93d6fe6e-256a-4888-8c09-9b885f8f0b20') -%}
+    {%- set parts = k.split('.') -%}
+    {%- if parts | length >= 2 -%}
+      {%- set item_id = parts[-2] -%}
+      {%- if item_id and item_id not in ns_sens.items and item_id | length == 36 and '-' in item_id -%}
+        {%- set ns_sens.items = ns_sens.items + [item_id] -%}
+      {%- endif -%}
+    {%- endif -%}
+  {%- endif -%}
+{%- endfor -%}
+
+{%- set ns_out = namespace(has_printed=false) -%}
+
+{# 2. Item-based discovery loop #}
+{%- if ns_sens.items | length > 0 -%}
+  {%- for item_id in ns_sens.items -%}
+    {%- set ns_s = namespace(
+          ds_name='',
+          has_trigger=false,
+          no_personal=false,
+          types_val='',
+          has_personal=false,
+          purpose_val=''
+        ) -%}
+    
+    {%- for k, v in replies.items() -%}
+      {%- if ('.' ~ item_id ~ '.') in k or k.startswith(item_id ~ '.') -%}
+        {%- set v_str = v | string -%}
+        
+        {# Trigger choice 93d6fe6e-256a-4888-8c09-9b885f8f0b20 #}
+        {%- if '93d6fe6e-256a-4888-8c09-9b885f8f0b20' in v_str or k.endswith('93d6fe6e-256a-4888-8c09-9b885f8f0b20') -%}
+          {%- set ns_s.has_trigger = true -%}
+        {%- endif -%}
+
+        {# Collection name answer d2098bc8-d3d4-45bc-b5f2-b395e12c5103 #}
+        {%- if k.endswith('d2098bc8-d3d4-45bc-b5f2-b395e12c5103') -%}
+          {%- set ns_s.ds_name = sanitize(v, fallback='') | trim -%}
+        {%- endif -%}
+
+        {# Choice 7c4593f8-43d6-4cf3-b74e-75ae29f8249e (No personal data -> Sensitive Types ed737c80-68a0-418d-9ddb-2ecd59d3ab72) #}
+        {%- if '7c4593f8-43d6-4cf3-b74e-75ae29f8249e' in v_str -%}
+          {%- set ns_s.no_personal = true -%}
+        {%- endif -%}
+        {%- if k.endswith('ed737c80-68a0-418d-9ddb-2ecd59d3ab72') -%}
+          {%- set ns_s.types_val = sanitize(v, fallback='') | trim -%}
+        {%- endif -%}
+
+        {# Choice 16c0e7dd-03cc-4ec8-9928-41d87631ddb3 (Has personal data -> Purpose 28dc53ef-afbd-4d46-9a62-26ef41d7b863) #}
+        {%- if '16c0e7dd-03cc-4ec8-9928-41d87631ddb3' in v_str -%}
+          {%- set ns_s.has_personal = true -%}
+        {%- endif -%}
+        {%- if k.endswith('28dc53ef-afbd-4d46-9a62-26ef41d7b863') -%}
+          {%- set ns_s.purpose_val = sanitize(v, fallback='') | trim -%}
+        {%- endif -%}
+      {%- endif -%}
+    {%- endfor -%}
+
+    {%- if ns_s.has_trigger -%}
+      {%- set ns_out.has_printed = true -%}
+      {%- if ns_s.ds_name -%}The data collection "{{ ns_s.ds_name }}" will contain sensitive data.{%- else -%}The data collection will contain sensitive data.{%- endif -%}
+      {%- if ns_s.no_personal -%}
+        {%- if ns_s.types_val -%}{{' '}}The collection does not contain any personal data, but the following types: {{ ns_s.types_val }}.{%- else -%}{{' '}}The collection does not contain any personal data.{%- endif -%}
+      {%- elif ns_s.has_personal -%}
+        {%- if ns_s.purpose_val -%}{{' '}}The collection contains personal data with purpose of collecting: {{ ns_s.purpose_val }}.{%- else -%}{{' '}}The collection contains personal data.{%- endif -%}
+      {%- endif %}
+
+{% endif -%}
+  {%- endfor -%}
+{%- endif -%}
+
+{# 3. Fallback for non-nested / flat response structure #}
+{%- if not ns_out.has_printed -%}
+  {%- set ns_f = namespace(
+        has_trigger=false,
+        ds_name='',
+        no_personal=false,
+        types_val='',
+        has_personal=false,
+        purpose_val=''
+      ) -%}
+  
+  {%- set ns_f.ds_name = get_val('d2098bc8-d3d4-45bc-b5f2-b395e12c5103') | trim -%}
+  {%- set ns_f.types_val = get_val('ed737c80-68a0-418d-9ddb-2ecd59d3ab72') | trim -%}
+  {%- set ns_f.purpose_val = get_val('28dc53ef-afbd-4d46-9a62-26ef41d7b863') | trim -%}
+
+  {%- for k, v in replies.items() -%}
+    {%- set v_str = v | string -%}
+    {%- if '93d6fe6e-256a-4888-8c09-9b885f8f0b20' in v_str -%}
+      {%- set ns_f.has_trigger = true -%}
+    {%- endif -%}
+    {%- if '7c4593f8-43d6-4cf3-b74e-75ae29f8249e' in v_str -%}
+      {%- set ns_f.no_personal = true -%}
+    {%- endif -%}
+    {%- if '16c0e7dd-03cc-4ec8-9928-41d87631ddb3' in v_str -%}
+      {%- set ns_f.has_personal = true -%}
+    {%- endif -%}
+  {%- endfor -%}
+
+  {%- if ns_f.has_trigger -%}
+    {%- if ns_f.ds_name -%}The data collection "{{ ns_f.ds_name }}" will contain sensitive data.{%- else -%}The data collection will contain sensitive data.{%- endif -%}
+    {%- if ns_f.no_personal -%}
+      {%- if ns_f.types_val -%}{{' '}}The collection does not contain any personal data, but the following types: {{ ns_f.types_val }}.{%- else -%}{{' '}}The collection does not contain any personal data.{%- endif -%}
+    {%- elif ns_f.has_personal -%}
+      {%- if ns_f.purpose_val -%}{{' '}}The collection contains personal data with purpose of collecting: {{ ns_f.purpose_val }}.{%- else -%}{{' '}}The collection contains personal data.{%- endif -%}
+    {%- endif %}
+
+{% endif -%}
+{%- endif -%}
+
+### Ethical Approval
+
+{# --- ETHICAL REVIEW / APPROVAL --- #}
+{%- set ns_eth = namespace(items=[]) -%}
+
+{# 1. Discover Item IDs containing ethical review trigger 40aafe08-4231-4dfa-90ea-33b52bcbb421 #}
+{%- for k, v in replies.items() -%}
+  {%- set v_str = v | string -%}
+  {%- if '40aafe08-4231-4dfa-90ea-33b52bcbb421' in v_str or k.endswith('40aafe08-4231-4dfa-90ea-33b52bcbb421') -%}
+    {%- set parts = k.split('.') -%}
+    {%- if parts | length >= 2 -%}
+      {%- set item_id = parts[-2] -%}
+      {%- if item_id and item_id not in ns_eth.items and item_id | length == 36 and '-' in item_id -%}
+        {%- set ns_eth.items = ns_eth.items + [item_id] -%}
+      {%- endif -%}
+    {%- endif -%}
+  {%- endif -%}
+{%- endfor -%}
+
+{%- set ns_out = namespace(has_printed=false) -%}
+
+{# 2. Item-based loop #}
+{%- if ns_eth.items | length > 0 -%}
+  {%- for item_id in ns_eth.items -%}
+    {%- set ns_e = namespace(
+          ds_collection='',
+          committee='',
+          app_num='',
+          has_trigger=false
+        ) -%}
+    
+    {%- for k, v in replies.items() -%}
+      {%- if ('.' ~ item_id ~ '.') in k or k.startswith(item_id ~ '.') -%}
+        {%- set v_str = v | string -%}
+        
+        {%- if '40aafe08-4231-4dfa-90ea-33b52bcbb421' in v_str or k.endswith('40aafe08-4231-4dfa-90ea-33b52bcbb421') -%}
+          {%- set ns_e.has_trigger = true -%}
+        {%- endif -%}
+
+        {%- if k.endswith('d2098bc8-d3d4-45bc-b5f2-b395e12c5103') -%}
+          {%- set ns_e.ds_collection = sanitize(v, fallback='') | trim -%}
+        {%- endif -%}
+
+        {%- if k.endswith('92794450-6bbe-4bd0-92a5-464ec4dd1165') -%}
+          {%- set ns_e.committee = sanitize(v, fallback='') | trim -%}
+        {%- endif -%}
+
+        {%- if k.endswith('b39e3dae-a4ab-4747-afda-2076cb7a0f5b') -%}
+          {%- set ns_e.app_num = sanitize(v, fallback='') | trim -%}
+        {%- endif -%}
+      {%- endif -%}
+    {%- endfor -%}
+
+    {%- if ns_e.has_trigger -%}
+      {%- set ns_out.has_printed = true -%}
+      {%- if ns_e.ds_collection -%}The dataset collection "{{ ns_e.ds_collection }}" is covered by an ethical review.{%- else -%}The dataset collection is covered by an ethical review.{%- endif -%}
+      {%- if ns_e.committee and ns_e.app_num -%}{{' '}}The ethics committee {{ ns_e.committee }} has approved the application with number {{ ns_e.app_num }}.{%- elif ns_e.committee -%}{{' '}}The ethics committee {{ ns_e.committee }} has approved the application.{%- elif ns_e.app_num -%}{{' '}}The application with number {{ ns_e.app_num }} has been approved.{%- endif %}
+
+{% endif -%}
+  {%- endfor -%}
+{%- endif -%}
+
+{# 3. Fallback for flat/single responses #}
+{%- if not ns_out.has_printed -%}
+  {%- set ns_f = namespace(has_trigger=false, ds_collection='', committee='', app_num='') -%}
+  
+  {%- set ns_f.ds_collection = get_val('d2098bc8-d3d4-45bc-b5f2-b395e12c5103') | trim -%}
+  {%- set ns_f.committee = get_val('92794450-6bbe-4bd0-92a5-464ec4dd1165') | trim -%}
+  {%- set ns_f.app_num = get_val('b39e3dae-a4ab-4747-afda-2076cb7a0f5b') | trim -%}
+
+  {%- for k, v in replies.items() -%}
+    {%- if '40aafe08-4231-4dfa-90ea-33b52bcbb421' in (v | string) -%}
+      {%- set ns_f.has_trigger = true -%}
+    {%- endif -%}
+  {%- endfor -%}
+
+  {%- if ns_f.has_trigger -%}
+    {%- if ns_f.ds_collection -%}The dataset collection "{{ ns_f.ds_collection }}" is covered by an ethical review.{%- else -%}The dataset collection is covered by an ethical review.{%- endif -%}
+    {%- if ns_f.committee and ns_f.app_num -%}{{' '}}The ethics committee {{ ns_f.committee }} has approved the application with number {{ ns_f.app_num }}.{%- elif ns_f.committee -%}{{' '}}The ethics committee {{ ns_f.committee }} has approved the application.{%- elif ns_f.app_num -%}{{' '}}The application with number {{ ns_f.app_num }} has been approved.{%- endif %}
+
+{% endif -%}
+{%- endif -%}
+
+### Informed Consent (PLEASE ADD OR DELETE SECTION)
+{{ get_val('UUID_INFORMED_CONSENT') }}
+
+---
+## ACKNOWLEDGEMENTS
+
+{%- set ns_ack = namespace(custom='', funder='', grantid='', status='') -%}
+{%- for k, v in replies.items() -%}
+  {# Custom Acknowledgements text #}
+  {%- if k.endswith('UUID_ACKNOWLEDGEMENTS') -%}
+    {%- set ns_ack.custom = sanitize(v, fallback='') | trim -%}
+  {# Funder Name (cb8a257d-9883-44b3-94f5-967a021fddd4) #}
+  {%- elif k.endswith('cb8a257d-9883-44b3-94f5-967a021fddd4') -%}
+    {%- set ns_ack.funder = sanitize(v, fallback='') | trim -%}
+  {# Grant ID #}
+  {%- elif k.endswith('acd91149-ae2f-4af0-b59c-e90f284fb615') -%}
+    {%- set ns_ack.grantid = sanitize(v, fallback='') | trim -%}
+  {# Funding Status #}
+  {%- elif k.endswith('9650b56c-cd2e-409d-92cb-3c2a4de66d0b') -%}
+    {%- set ns_ack.status = sanitize(v, fallback='') | trim -%}
+  {%- endif -%}
+{%- endfor -%}
+
+{%- set funder = ns_ack.funder -%}
+{%- set grantid = ns_ack.grantid -%}
+{%- set status = ns_ack.status -%}
+
+{%- set text_out = '' -%}
+{%- if status and grantid and funder -%}
+  {%- set text_out = 'This project is ' ~ (status | lower) ~ ' under grant number ' ~ grantid ~ ' by ' ~ funder ~ '.' -%}
+{%- elif status and grantid -%}
+  {%- set text_out = 'This project is ' ~ (status | lower) ~ ' under grant number ' ~ grantid ~ '.' -%}
+{%- elif status and funder -%}
+  {%- set text_out = 'This project is ' ~ (status | lower) ~ ' by ' ~ funder ~ '.' -%}
+{%- elif grantid and funder -%}
+  {%- set text_out = 'This project is funded under grant number ' ~ grantid ~ ' by ' ~ funder ~ '.' -%}
+{%- elif status -%}
+  {%- set text_out = 'This project is ' ~ (status | lower) ~ '.' -%}
+{%- elif grantid -%}
+  {%- set text_out = 'This project is under grant number ' ~ grantid ~ '.' -%}
+{%- elif funder -%}
+  {%- set text_out = 'This project is funded by ' ~ funder ~ '.' -%}
+{%- endif %}
+
+{% if ns_ack.custom -%}
+{{ ns_ack.custom | safe }}
+
+{% endif -%}
+This README was based on the template/examples authored by the Collective of Data Stewards of the Czech Data Stewards Community(https://github.com/Czech-Data-Steward-Community/README_FILES/blob/main/Collective_datastewards.md) and is licensed under a Creative Commons Attribution 4.0 International License (CC BY 4.0),(https://creativecommons.org/licenses/by/4.0/).
+
+{% if text_out -%}
+
+{{ text_out | safe }}
+{%- endif %}
+
+---
+
+## README FILE CHANGE HISTORY
+
+{% if ctx.questionnaire is defined and ctx.questionnaire.versions is defined and ctx.questionnaire.versions | length > 0 -%}
+{% for v in ctx.questionnaire.versions -%}
+{% set v_date = v.createdAt if v.createdAt is defined else v.created_at -%}
+- "{{ v.name }}" ({{ v_date | datetime_format("%Y.%m.%d-%H%M") if v_date else 'N/A' }}){% if v.description %} - {{ v.description }}{% endif %}
+{% endfor -%}
+{%- else -%}
+- "Version {{ ctx.document.createdAt | datetime_format("%Y.%m.%d-%H%M") }}" - Initial document export.
+{%- endif %}
