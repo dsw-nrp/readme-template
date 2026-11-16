@@ -19,7 +19,7 @@ Responsible for the overall management and development of the document template,
 
 ## Contributors
 
-* **Marek Suchanek**
+* **Marek Suchánek**
   * ORCID: [0000-0001-7525-9218](https://orcid.org/0000-0001-7525-9218)
 
 ## Acknowledgements
