@@ -1,6 +1,6 @@
 # README File
 
-*If you need to also use README files for your data deposition, you do not have to do it twice. Just print the answers from the DMP. Check that all sections are answered or remove what is not applicable.*
+*If you need to create a README file for your data deposition or to save documentation together with your data, you do not have to fill in the information twice. Just print the answers from the already filled DMP. Check that all sections are answered or remove what is not applicable. The answers that are available in the relevant Knowledge Model will be printed into the readme file. You can export it the same way you export any document template format through the application.*
 
 The document template produces a dataset README file in Markdown, plain text and JSON from a project based on the Knowledge Model of the Czech National Repository Platform for Research Data.
 
@@ -16,6 +16,11 @@ Responsible for the overall management and development of the document template,
 
 * **Georgia Koutentaki**
   * ORCID: [0000-0002-8099-9963](https://orcid.org/0000-0002-8099-9963)
+
+## Contributors
+
+* **Marek Suchanek**
+  * ORCID: [0000-0001-7525-9218](https://orcid.org/0000-0001-7525-9218)
 
 ## Acknowledgements
 
